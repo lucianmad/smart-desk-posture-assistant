@@ -1,0 +1,22 @@
+# Virtual Environments
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+
+# Keys & Secrets (CRITICAL)
+firebase-credentials.json
+serviceAccountKey.json
+.env
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
+
+# Media / Test Output
+*.jpg
+*.png
+*.mp4
