@@ -12,14 +12,11 @@ class CameraStream:
         self.picam2.configure(self.cam_config)
         
     def start(self):
-        """Starts the camera hardware."""
         self.picam2.start()
         
     def read_frame(self):
-        """Captures a frame and applies the mirror flip."""
         frame = self.picam2.capture_array()
         return cv2.flip(frame, 1)
         
     def stop(self):
-        """Safely shuts down the camera."""
         self.picam2.stop()

@@ -1,10 +1,13 @@
 import cv2
+import config
 from camera_module import CameraStream
 from posture_engine import PostureEngine
+from firebase_manager import FirebaseManager
 
 def main():
     cam = CameraStream()
     engine = PostureEngine()
+    cloud = FirebaseManager("firebase-credentials.json", config.FIREBASE_DB_URL)
 
     cam.start()
     print("System Ready!")
@@ -16,6 +19,8 @@ def main():
             frame = cam.read_frame()
             
             frame, status = engine.process_frame(frame)
+            
+            cloud.push_state(status)
 
             cv2.imshow("Smart Desk Posture Assistant", frame)
 
