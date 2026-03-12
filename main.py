@@ -18,9 +18,18 @@ def main():
         while True:
             frame = cam.read_frame()
             
-            frame, status = engine.process_frame(frame)
+            frame, status, landmarks_dict = engine.process_frame(frame)
             
             cloud.push_state(status)
+            cloud.push_telemetry(landmarks_dict)
+            
+            if cloud.trigger_calibration:
+                cloud.trigger_calibration = False
+                success, face_width, neck_dist = engine.trigger_calibration()
+                if success:
+                    print(f"✅ Remotely Calibrated! Baseline Face Width: {face_width:.1f}px | Neck Distance: {neck_dist:.1f}px")
+                else:
+                    print("⚠️ Remote Calibration Failed: Waiting for buffer to fill.")
 
             cv2.imshow("Smart Desk Posture Assistant", frame)
 
@@ -29,9 +38,9 @@ def main():
             if key == ord('q'):
                 break
             elif key == ord('c'):
-                success, width, neck = engine.trigger_calibration()
+                success, face_width, neck_dist = engine.trigger_calibration()
                 if success:
-                    print(f"✅ Calibrated! Baseline Width: {width:.1f}px | Neck: {neck:.1f}px")
+                    print(f"✅ Calibrated! Baseline Face Width: {face_width:.1f}px | Neck Distance: {neck_dist:.1f}px")
                 else:
                     print("⚠️ Waiting for buffer to fill. Stay still and try again.")
                     

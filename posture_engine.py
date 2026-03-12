@@ -48,6 +48,8 @@ class PostureEngine:
         
         self.is_turning = False
         h, w, _ = frame.shape
+        
+        landmarks_dict = None
 
         if results.face_landmarks and results.pose_landmarks:
             self.last_detection_time = time.time()
@@ -56,6 +58,14 @@ class PostureEngine:
             nose, l_ear, r_ear = face_lms[1], face_lms[234], face_lms[454]
             pose_lms = results.pose_landmarks.landmark
             l_shldr, r_shldr = pose_lms[11], pose_lms[12]
+            
+            landmarks_dict = {
+                "n": [nose.x, nose.y],
+                "le": [l_ear.x, l_ear.y],
+                "re": [r_ear.x, r_ear.y],
+                "ls": [l_shldr.x, l_shldr.y],
+                "rs": [r_shldr.x, r_shldr.y]
+            }
 
             nx, ny = int(nose.x * w), int(nose.y * h)
             lex, ley = int(l_ear.x * w), int(l_ear.y * h)
@@ -91,23 +101,28 @@ class PostureEngine:
                 tilt_change = abs(avg_shoulder_tilt - self.baseline_shoulder_tilt)
                 tilt_ratio = tilt_change / (self.baseline_face_width + 1e-6)
                 
+                is_slouching = slouch_ratio < config.SLOUCHING_THRESHOLD
+                is_leaning = face_ratio > config.FHP_THRESHOLD
+                is_asymmetric = tilt_ratio > config.SHOULDER_ASYMMETRY_THRESHOLD
+                
+                bad_posture_count = sum([is_slouching, is_leaning, is_asymmetric])
+                
                 if self.is_turning:
-                    if slouch_ratio < config.SLOUCHING_THRESHOLD:
+                    if is_slouching:
                         pending_status, pending_color = "SLOUCHING", (0, 0, 255)
                     else:
                         pending_status, pending_color = "HEAD TURNED", (255, 200, 0) 
                 else:
-                    if tilt_ratio > config.SHOULDER_ASYMMETRY_THRESHOLD:
+                    if bad_posture_count >= 2:
+                        pending_status, pending_color = "CRITICAL POSTURE", (0, 0, 255)
+                    elif is_asymmetric:
                         pending_status, pending_color = "ASYMMETRIC SHOULDERS", (0, 0, 255)
-                    elif face_ratio > config.FHP_THRESHOLD:
+                    elif is_leaning:
                         pending_status, pending_color = "LEANING FORWARD", (0, 0, 255)
-                    elif slouch_ratio < config.SLOUCHING_THRESHOLD:
+                    elif is_slouching:
                         pending_status, pending_color = "SLOUCHING", (0, 0, 255)
                     else:
                         pending_status, pending_color = "Posture OK", (0, 255, 0)
-                        
-                if face_ratio > config.FHP_THRESHOLD and slouch_ratio < config.SLOUCHING_THRESHOLD:
-                    pending_status, pending_color = "CRITICAL POSTURE", (0, 0, 255)
                     
                 is_bad_posture = (pending_color == (0, 0, 255))
                 
@@ -141,8 +156,9 @@ class PostureEngine:
                 self.neck_dist_buffer.clear()
                 self.shoulder_tilt_buffer.clear()
                 self.bad_posture_start_time = None
+                self.current_displayed_status = "IDLE (User Away)"
                 cv2.putText(frame, "IDLE (User Away)", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (100, 100, 100), 3)
             else:
                 cv2.putText(frame, "SEARCHING...", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 3)
 
-        return frame, self.current_displayed_status
+        return frame, self.current_displayed_status, landmarks_dict

@@ -1,5 +1,5 @@
 import firebase_admin
-from firebase_admin import credentials, db
+from firebase_admin import credentials, db, firestore
 import threading
 import time
 from datetime import datetime
@@ -9,17 +9,41 @@ class FirebaseManager:
         print("Connecting to Firebase...")
         self.device_id = device_id
         
+        # Posture change tracking variables
         self.last_pushed_status = None
         self.state_start_time = time.time()
+        
+        # Telemetry variables
+        self.is_streaming_telemetry = False
+        self.last_telemetry_time = 0
+        
+        # Calibration variable
+        self.trigger_calibration = False
         
         cred = credentials.Certificate(cred_path)
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred, {'databaseURL': db_url})
         
+        # RTDB connection
         self.current_state_ref = db.reference(f'devices/{self.device_id}/current_state')
-        self.daily_logs_ref = db.reference(f'daily_logs/{self.device_id}')
+        # Firestore connection
+        self.firestore_db = firestore.client()
         
-        print("✅ Firebase Connected!")
+        # Telemetry for coordinates connection where the device puts the current telemetry values
+        self.telemetry_ref = db.reference(f'devices/{self.device_id}/telemetry')
+        # Commands for cooridnates requests that come from the mobile app connection
+        self.stream_ref = db.reference(f'devices/{self.device_id}/commands/stream_telemetry')
+        
+        # Commands for calibration requests that come from the mobile app connection
+        self.calibrate_ref = db.reference(f'devices/{self.device_id}/commands/calibrate')
+        
+        self.stream_ref.set(False)
+        self.calibrate_ref.set(False)
+        
+        self.stream_ref.listen(self._on_stream_command)
+        self.calibrate_ref.listen(self._on_calibrate_command)
+        
+        print("✅ Firebase Connected! RTDB & Firestore")
 
     def push_state(self, status):
         if status != self.last_pushed_status:
@@ -56,12 +80,40 @@ class FirebaseManager:
         try:
             today_str = datetime.now().strftime("%Y-%m-%d")
             
-            session_ref = self.daily_logs_ref.child(today_str).child("sessions").push()
-            
-            session_ref.set({
+            log_data =  {
                 "status": status,
-                "duration_sec": duration_sec,
-                "timestamp": int(time.time())
-            })
+                "duration": duration_sec,
+                "timestamp": firestore.SERVER_TIMESTAMP
+            }
+            
+            self.firestore_db.collection("daily_logs").document(self.device_id).collection(today_str).add(log_data)
+            
         except Exception as e:
             print(f"Firebase History Log Error: {e}")
+    
+    def _on_stream_command(self, event):
+        if event.data is not None:
+            self.is_streaming_telemetry = bool(event.data)
+            state = "ON" if self.is_streaming_telemetry else "OFF"
+            print(f"Telemetry Stream turned {state}")
+            
+    def push_telemetry(self, landmarks_dict):
+        if not self.is_streaming_telemetry or landmarks_dict is None:
+            return
+
+        current_time = time.time()
+        if current_time - self.last_telemetry_time > 0.2:
+            self.last_telemetry_time = current_time
+            threading.Thread(target=self._update_telemetry, args=(landmarks_dict,)).start()
+            
+    def _update_telemetry(self, payload):
+        try:
+            self.telemetry_ref.set(payload)
+        except Exception as e:
+            pass
+            
+    def _on_calibrate_command(self, event):
+        if event.data is True:
+            print("Cloud requested remote calibration!")
+            self.trigger_calibration = True
+            self.calibrate_ref.set(False)
