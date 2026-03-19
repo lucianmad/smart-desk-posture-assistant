@@ -1,5 +1,6 @@
 import cv2
 import config
+import os
 from camera_module import CameraStream
 from posture_engine import PostureEngine
 from firebase_manager import FirebaseManager
@@ -62,6 +63,7 @@ def main():
     finally:
         cam.stop()
         cv2.destroyAllWindows()
+        os._exit(0)
 
 if __name__ == "__main__":
     main()
