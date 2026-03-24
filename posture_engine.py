@@ -1,5 +1,6 @@
 import time
 import cv2
+import math
 import mediapipe as mp
 import numpy as np
 from collections import deque
@@ -13,32 +14,33 @@ class PostureEngine:
             model_complexity=1, 
             smooth_landmarks=True,
             refine_face_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.7
         )
         
         self.calibrated = False
         self.baseline_face_width = 0
         self.baseline_nose_to_mid_shoulders_dist = 0
-        self.baseline_shoulder_height_diff = 0
+        self.baseline_shoulder_angle = 0
+        self.baseline_head_angle = 0
 
         self.face_width_buffer = deque(maxlen=config.SMOOTHING_WINDOW)
         self.nose_to_mid_shoulders_dist_buffer = deque(maxlen=config.SMOOTHING_WINDOW)
-        self.shoulder_height_diff_buffer = deque(maxlen=config.SMOOTHING_WINDOW)
-        self.shoulder_width_buffer = deque(maxlen=5)
+        self.shoulder_angle_buffer = deque(maxlen=config.SMOOTHING_WINDOW)
+        self.head_angle_buffer = deque(maxlen=config.SMOOTHING_WINDOW)
 
         self.last_detection_time = time.time()
         self.bad_posture_start_time = None
-        self.current_displayed_status = "SEARCHING"
-        self.current_color = (200, 200, 200)
+        self.current_displayed_status = config.Status.SEARCHING
+        self.current_color = config.Colors.INFO
         self.is_turning = False
 
     def trigger_calibration(self):
         if not self.is_turning and len(self.face_width_buffer) == config.SMOOTHING_WINDOW:
             self.baseline_face_width = np.mean(self.face_width_buffer)
             self.baseline_nose_to_mid_shoulders_dist = np.mean(self.nose_to_mid_shoulders_dist_buffer)
-            self.baseline_shoulder_height_diff = np.mean(self.shoulder_height_diff_buffer)
-            self.baseline_shoulder_width = np.mean(self.shoulder_width_buffer)
+            self.baseline_shoulder_angle = np.mean(self.shoulder_angle_buffer)
+            self.baseline_head_angle = np.mean(self.head_angle_buffer)
             self.calibrated = True
             return True, self.baseline_face_width, self.baseline_nose_to_mid_shoulders_dist
         return False, 0, 0
@@ -88,60 +90,59 @@ class PostureEngine:
         
         face_width = ((lex - rex) ** 2 + (ley - rey) ** 2) ** 0.5
         shoulder_mid_y = (lsy + rsy) / 2
-        nose_to_mid_shoulders_dist = ny - shoulder_mid_y
-        shoulder_height_diff = lsy - rsy
-        shoulder_width = ((lsx - rsx) ** 2 + (lsy - rsy) ** 2) ** 0.5
+        nose_to_mid_shoulders_dist = shoulder_mid_y - ny
+        shoulder_angle = math.degrees(math.atan2(lsy - rsy, lsx - rsx))
+        head_angle = math.degrees(math.atan2(rey - ley, rex - lex))
         
         if not is_turning:
             self.face_width_buffer.append(face_width)
         
-        self.shoulder_height_diff_buffer.append(shoulder_height_diff)
         self.nose_to_mid_shoulders_dist_buffer.append(nose_to_mid_shoulders_dist)
-        self.shoulder_width_buffer.append(shoulder_width)
+        self.shoulder_angle_buffer.append(shoulder_angle)
+        self.head_angle_buffer.append(head_angle)
         
         avg_face_width = np.mean(self.face_width_buffer) if self.face_width_buffer else face_width
         avg_nose_to_mid_shoulders_dist = np.mean(self.nose_to_mid_shoulders_dist_buffer) if self.nose_to_mid_shoulders_dist_buffer else nose_to_mid_shoulders_dist
-        avg_shoulder_height_diff = np.mean(self.shoulder_height_diff_buffer) if self.shoulder_height_diff_buffer else shoulder_height_diff
-        avg_shoulder_width = np.mean(self.shoulder_width_buffer) if self.shoulder_width_buffer else shoulder_width
+        avg_shoulder_angle = np.mean(self.shoulder_angle_buffer) if self.shoulder_angle_buffer else shoulder_angle
+        avg_head_angle = np.mean(self.head_angle_buffer) if self.head_angle_buffer else head_angle
             
-        return avg_face_width, avg_nose_to_mid_shoulders_dist, avg_shoulder_height_diff, avg_shoulder_width, shoulder_mid_y
+        return avg_face_width, avg_nose_to_mid_shoulders_dist, avg_shoulder_angle, avg_head_angle, shoulder_mid_y
         
-    def _evaluate_posture(self, avg_face_width, avg_nose_to_mid_shoulders_dist, avg_shoulder_height_diff, avg_shoulder_width, is_turning):
+    def _evaluate_posture(self, avg_face_width, avg_nose_to_mid_shoulders_dist, avg_shoulder_angle, avg_head_angle, is_turning):
         fhp_ratio = avg_face_width / (self.baseline_face_width + 1e-6)
         nms_ratio = avg_nose_to_mid_shoulders_dist / (self.baseline_nose_to_mid_shoulders_dist + 1e-6)
-        shoulder_height_diff = abs(avg_shoulder_height_diff - self.baseline_shoulder_height_diff)
-        shoulder_asym_ratio = shoulder_height_diff / (avg_shoulder_width + 1e-6)
+        shoulder_angle_diff = abs(avg_shoulder_angle - self.baseline_shoulder_angle)
+        head_angle_diff = abs(avg_head_angle - self.baseline_head_angle)
         
         is_fhp = fhp_ratio > config.FHP_THRESHOLD
         is_slouching = nms_ratio < config.SLOUCHING_THRESHOLD and fhp_ratio > config.SLOUCHING_FHP_MIN_THRESHOLD
-        is_asymmetric = shoulder_asym_ratio > config.SHOULDER_ASYMMETRY_THRESHOLD
+        is_asymmetric_shoulders = shoulder_angle_diff > config.SHOULDER_ASYMMETRY_THRESHOLD
+        is_head_tilted = head_angle_diff > config.HEAD_TILT_THRESHOLD
         
-        bad_posture_count = sum([is_fhp, is_slouching, is_asymmetric])
+        bad_posture_count = sum([is_fhp, is_slouching, is_asymmetric_shoulders, is_head_tilted])
         
         if is_turning:
-            if is_slouching and is_asymmetric:
-                pending_status, pending_color = "CRITICAL POSTURE", (0, 0, 255)
-            elif is_slouching:
-                pending_status, pending_color = "SLOUCHING", (0, 0, 255)
-            elif is_asymmetric:
-                pending_status, pending_color = "ASYMMETRIC SHOULDERS", (0, 0, 255)
+            if is_asymmetric_shoulders:
+                pending_status, pending_color = config.Status.ASYMMETRIC_SHOULDERS, config.Colors.CRITICAL
+            elif is_head_tilted:
+                pending_status, pending_color = config.Status.HEAD_TILTED, config.Colors.CRITICAL
             else:
-                pending_status, pending_color = "HEAD TURNED", (255, 200, 0)
+                pending_status, pending_color = config.Status.HEAD_TURNED, config.Colors.INFO
         else:
-            if bad_posture_count >= 2:
-                pending_status, pending_color = "CRITICAL POSTURE", (0, 0, 255)
-            elif is_asymmetric:
-                pending_status, pending_color = "ASYMMETRIC SHOULDERS", (0, 0, 255)
+            if is_slouching:
+                pending_status, pending_color = config.Status.SLOUCHING, config.Colors.CRITICAL
             elif is_fhp:
-                pending_status, pending_color = "LEANING FORWARD", (0, 0, 255)
-            elif is_slouching:
-                pending_status, pending_color = "SLOUCHING", (0, 0, 255)
+                pending_status, pending_color = config.Status.FHP, config.Colors.CRITICAL
+            elif is_asymmetric_shoulders:
+                pending_status, pending_color = config.Status.ASYMMETRIC_SHOULDERS, config.Colors.CRITICAL
+            elif is_head_tilted:
+                pending_status, pending_color = config.Status.HEAD_TILTED, config.Colors.CRITICAL
             else:
-                pending_status, pending_color = "Posture OK", (0, 255, 0)
+                pending_status, pending_color = config.Status.OK, config.Colors.OK
             
-        return pending_status, pending_color, fhp_ratio, nms_ratio, shoulder_asym_ratio
+        return pending_status, pending_color, fhp_ratio, nms_ratio, shoulder_angle_diff, head_angle_diff
         
-    def _draw_overlay(self, frame, landmarks_pixel, shoulder_mid_y, status, color, fhp_ratio, nms_ratio, shoulder_asym_ratio):
+    def _draw_overlay(self, frame, landmarks_pixel, shoulder_mid_y, status, color, fhp_ratio, nms_ratio, shoulder_angle_diff, head_angle_diff):
         nx, ny = landmarks_pixel["nose"]
         lex, ley = landmarks_pixel["left_ear"]
         rex, rey = landmarks_pixel["right_ear"]
@@ -151,12 +152,13 @@ class PostureEngine:
         cv2.line(frame, (lex, ley), (rex, rey), (0, 255, 0), 2)
         cv2.line(frame, (nx, ny), (nx, int(shoulder_mid_y)), (0, 255, 255), 2)
         cv2.line(frame, (lsx, lsy), (rsx, rsy), (255, 0, 0), 2)
-        cv2.putText(frame, status, (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 3)
+        cv2.putText(frame, status, (20, 250), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 3)
     
         if fhp_ratio > 0:
-            cv2.putText(frame, f"FHP: {fhp_ratio:.2f}x", (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
-            cv2.putText(frame, f"NMS: {nms_ratio:.2f}x", (20, 158), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
-            cv2.putText(frame, f"ASYM: {shoulder_asym_ratio:.2f}x", (20, 176), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+            cv2.putText(frame, f"FHP: {fhp_ratio:.2f}x", (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
+            cv2.putText(frame, f"NMS: {nms_ratio:.2f}x", (20, 158), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+            cv2.putText(frame, f"SHOULDER ASYMMETRY: {shoulder_angle_diff:.1f} degrees", (20, 176), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+            cv2.putText(frame, f"HEAD TILT: {head_angle_diff:.1f} degrees", (20, 194), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
         
         return frame
         
@@ -178,19 +180,24 @@ class PostureEngine:
             
             self.is_turning = self._calculate_yaw(landmarks_pixel)
             
-            avg_face_width, avg_nose_to_mid_shoulders_dist, avg_shoulder_height_diff, avg_shoulder_width, shoulder_mid_y = self._calculate_metrics(landmarks_pixel, self.is_turning)
+            avg_face_width, avg_nose_to_mid_shoulders_dist, avg_shoulder_angle, avg_head_angle, shoulder_mid_y = self._calculate_metrics(landmarks_pixel, self.is_turning)
             
-            pending_status = "UNCALIBRATED"
-            pending_color = (255, 255, 0)
+            pending_status = config.Status.UNCALIBRATED
+            pending_color = config.Colors.INFO
             
             fhp_ratio = 0
             nms_ratio = 0
-            shoulder_asym_ratio = 0
+            shoulder_angle_diff = 0
+            head_angle_diff = 0
             
             if self.calibrated:
-                pending_status, pending_color, fhp_ratio, nms_ratio, shoulder_asym_ratio = self._evaluate_posture(avg_face_width, avg_nose_to_mid_shoulders_dist, avg_shoulder_height_diff, avg_shoulder_width, self.is_turning)
-                    
-                is_bad_posture = (pending_color == (0, 0, 255))
+                pending_status, pending_color, fhp_ratio, nms_ratio, shoulder_angle_diff, head_angle_diff = self._evaluate_posture(avg_face_width, avg_nose_to_mid_shoulders_dist, avg_shoulder_angle, avg_head_angle, self.is_turning)
+                
+                if pending_status == config.Status.OK and fhp_ratio < 1:
+                    self.baseline_face_width = self.baseline_face_width * 0.95 + avg_face_width * 0.05
+                    self.baseline_nose_to_mid_shoulders_dist = self.baseline_nose_to_mid_shoulders_dist * 0.95 + avg_nose_to_mid_shoulders_dist * 0.05
+                
+                is_bad_posture = (pending_color == config.Colors.CRITICAL)
                 
                 if is_bad_posture:
                     if self.bad_posture_start_time is None:
@@ -202,24 +209,24 @@ class PostureEngine:
                     else:
                         countdown = int(config.GRACE_PERIOD_SECONDS - elapsed_time) + 1
                         self.current_displayed_status = f"Warning... {countdown}"
-                        self.current_color = (0, 165, 255)
+                        self.current_color = config.Colors.WARNING
                 else:
                     self.bad_posture_start_time = None
                     self.current_displayed_status = pending_status
                     self.current_color = pending_color
 
-            frame = self._draw_overlay(frame, landmarks_pixel, shoulder_mid_y, self.current_displayed_status, self.current_color, fhp_ratio, nms_ratio, shoulder_asym_ratio)
+            frame = self._draw_overlay(frame, landmarks_pixel, shoulder_mid_y, self.current_displayed_status, self.current_color, fhp_ratio, nms_ratio, shoulder_angle_diff, head_angle_diff)
 
         else:
             if time.time() - self.last_detection_time > config.ABSENCE_THRESHOLD:
                 self.face_width_buffer.clear()
                 self.nose_to_mid_shoulders_dist_buffer.clear()
-                self.shoulder_height_diff_buffer.clear()
-                self.shoulder_width_buffer.clear()
+                self.shoulder_angle_buffer.clear()
+                self.head_angle_buffer.clear()
                 self.bad_posture_start_time = None
-                self.current_displayed_status = "IDLE (User Away)"
-                cv2.putText(frame, "IDLE (User Away)", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (100, 100, 100), 3)
+                self.current_displayed_status = config.Status.IDLE
+                cv2.putText(frame, config.Status.IDLE, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (100, 100, 100), 3)
             else:
-                cv2.putText(frame, "SEARCHING...", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 3)
+                cv2.putText(frame, config.Status.SEARCHING, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 3)
 
         return frame, self.current_displayed_status, landmarks_normalized
