@@ -87,10 +87,12 @@ class FirebaseManager:
             log_data =  {
                 "status": status,
                 "duration": duration_sec,
+                "date": today_str,
+                "deviceId": self.device_id,
                 "timestamp": firestore.SERVER_TIMESTAMP
             }
             
-            self.firestore_db.collection("users").document(self.user_uid).collection("daily_logs").document(self.device_id).collection(today_str).add(log_data)
+            self.firestore_db.collection("users").document(self.user_uid).collection("sessions").add(log_data)
             
         except Exception as e:
             print(f"Firebase History Log Error: {e}")
