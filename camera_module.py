@@ -7,7 +7,7 @@ class CameraStream:
         print("Initializing Pi5 Camera...")
         self.picam2 = Picamera2()
         self.cam_config = self.picam2.create_preview_configuration(
-            main={"size": (config.CAMERA_WIDTH, config.CAMERA_HEIGHT), "format": "BGR888"}
+            main={"size": (config.CAMERA_WIDTH, config.CAMERA_HEIGHT), "format": "RGB888"}
         )
         self.picam2.configure(self.cam_config)
         
