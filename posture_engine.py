@@ -204,9 +204,6 @@ class PostureEngine:
             if self.calibrated:
                 pending_status, pending_color, fhp_ratio, nms_ratio, shoulder_angle_diff, head_angle_diff, shoulder_drop = self._evaluate_posture(avg_face_width, avg_nose_to_mid_shoulders_dist, avg_shoulder_angle, avg_head_angle, avg_shoulder_mid_y, self.is_turning)
                 
-                if pending_status == config.Status.OK and fhp_ratio < 1:
-                    self.baseline_face_width = self.baseline_face_width * 0.998 + avg_face_width * 0.002
-                
                 if pending_status in config.ACUTE_STATUSES:
                     self.prolonged_bad_posture_start_time = None
                     
@@ -217,8 +214,6 @@ class PostureEngine:
                     if elapsed_time > config.GRACE_PERIOD_SECONDS:
                         self.current_displayed_status = pending_status
                         self.current_color = pending_color
-                    else:
-                        pass
                         
                 elif pending_status in config.PROLONGED_STATUSES:
                     self.bad_posture_start_time = None
@@ -229,7 +224,7 @@ class PostureEngine:
                     elapsed_time = time.time() - self.prolonged_bad_posture_start_time
                     
                     self.current_displayed_status = pending_status
-                    self.current_color = config.Colors.WARNING
+                    self.current_color = config.Colors.WARNING if elapsed_time > config.PROLONGED_GRACE_PERIOD_SECONDS else config.Colors.INFO
                         
                 else:
                     self.bad_posture_start_time = None
@@ -247,6 +242,7 @@ class PostureEngine:
                 self.head_angle_buffer.clear()
                 self.shoulder_mid_y_buffer.clear()
                 self.bad_posture_start_time = None
+                self.prolonged_bad_posture_start_time = None
                 self.current_displayed_status = config.Status.IDLE
                 cv2.putText(frame, config.Status.IDLE, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (100, 100, 100), 3)
             else:

@@ -5,19 +5,18 @@ import time
 from camera_module import CameraStream
 from posture_engine import PostureEngine
 from firebase_manager import FirebaseManager
+from notification_manager import NotificationManager
 
 def main():
     cam = CameraStream()
     engine = PostureEngine()
     cloud = FirebaseManager("firebase-credentials.json", config.FIREBASE_DB_URL, config.USER_UID, config.DEVICE_ID)
+    notifier = NotificationManager()
 
     cam.start()
     print("System Ready!")
     print("Press 'c' to calibrate.")
     print("Press 'q' to quit.")
-    
-    critical_start_time = None
-    last_notification_time = 0
     
     try:
         while True:
@@ -25,32 +24,14 @@ def main():
             
             frame, status, landmarks_dict = engine.process_frame(frame)
             
-            is_acute_bad = status in config.ACUTE_STATUSES
-            is_prolonged_bad = status in config.PROLONGED_STATUSES
+            current_time = time.time()
+            result = notifier.update(status, current_time)
             
-            if is_acute_bad:
-                current_time = time.time()
-                if critical_start_time is None:
-                    critical_start_time = time.time()
-                elapsed_bad_time = time.time() - critical_start_time
-                if elapsed_bad_time > config.NOTIFICATION_THRESHOLD_SECONDS:
-                    if current_time - last_notification_time > config.NOTIFICATION_THRESHOLD_SECONDS:
-                        cloud.trigger_notification(status, max(1, int(elapsed_bad_time // 60)))
-                        last_notification_time = current_time
+            if result is not None:
+                dominant_posture, weighted_score = result
+                cloud.trigger_notification(dominant_posture, weighted_score)
+                print(f"Notification sent — dominant: {dominant_posture}, score: {weighted_score:.1f}")
 
-            elif is_prolonged_bad:
-                current_time = time.time()
-                if critical_start_time is None:
-                    critical_start_time = time.time()
-                elapsed_bad_time = time.time() - critical_start_time
-                if elapsed_bad_time > config.PROLONGED_GRACE_PERIOD_SECONDS:
-                    if current_time - last_notification_time > config.PROLONGED_GRACE_PERIOD_SECONDS:
-                        cloud.trigger_notification(status, max(1, int(elapsed_bad_time // 60)))
-                        last_notification_time = current_time
-            
-            else:
-                critical_start_time = None
-            
             cloud.push_state(status)
             cloud.push_telemetry(landmarks_dict)
             

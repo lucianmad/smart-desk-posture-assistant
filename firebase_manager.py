@@ -10,44 +10,41 @@ class FirebaseManager:
         self.user_uid = user_uid
         self.device_id = device_id
         
-        # Posture change tracking variables
+        self._init_state_tracking()
+        self._init_firebase(cred_path, db_url)
+        self._init_references()
+        self._init_listeners()
+    
+        print("✅ Firebase Connected! RTDB & Firestore")
+        
+    def _init_state_tracking(self):
         self.last_pushed_status = None
         self.state_start_time = time.time()
-        
-        # Telemetry variables
-        self.is_streaming_telemetry = threading.Event()
         self.last_telemetry_time = 0
-        
-        # Calibration variable
+        self.is_streaming_telemetry = threading.Event()
         self.calibration_requested = threading.Event()
         
+    def _init_firebase(self, cred_path, db_url):
         cred = credentials.Certificate(cred_path)
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred, {'databaseURL': db_url})
-        
-        # RTDB connection
-        self.current_state_ref = db.reference(f'users/{self.user_uid}/devices/{self.device_id}/current_state')
-        # Firestore connection
         self.firestore_db = firestore.client()
-        
-        # Telemetry for coordinates connection where the device puts the current telemetry values
-        self.telemetry_ref = db.reference(f'users/{self.user_uid}/devices/{self.device_id}/telemetry')
-        # Commands for cooridnates requests that come from the mobile app connection
-        self.stream_ref = db.reference(f'users/{self.user_uid}/devices/{self.device_id}/commands/stream_telemetry')
-        
-        # Commands for calibration requests that come from the mobile app connection
-        self.calibrate_ref = db.reference(f'users/{self.user_uid}/devices/{self.device_id}/commands/calibrate')
-        
-        # FCM for push-notifications
-        self.notification_ref = db.reference(f'users/{self.user_uid}/devices/{self.device_id}/notify')
+
+    def _init_references(self):
+        base = f'users/{self.user_uid}/devices/{self.device_id}'
+        self.current_state_ref = db.reference(f'{base}/current_state')
+        self.telemetry_ref = db.reference(f'{base}/telemetry')
+        self.stream_ref = db.reference(f'{base}/commands/stream_telemetry')
+        self.calibrate_ref = db.reference(f'{base}/commands/calibrate')
+        self.notification_ref = db.reference(f'{base}/notify')
         
         self.stream_ref.set(False)
         self.calibrate_ref.set(False)
         
+    def _init_listeners(self):
         self.stream_ref.listen(self._on_stream_command)
         self.calibrate_ref.listen(self._on_calibrate_command)
-        
-        print("✅ Firebase Connected! RTDB & Firestore")
+            
 
     def push_state(self, status):
         if status != self.last_pushed_status:
